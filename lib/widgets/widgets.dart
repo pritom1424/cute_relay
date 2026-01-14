@@ -1,22 +1,22 @@
 import 'dart:convert';
 import 'package:fast_chat/app_constatnts.dart';
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart'; // Add this to pubspec.yaml
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:webview_flutter/webview_flutter.dart'; // Ensure this is in pubspec.yaml
 
 class ChatBubble extends StatelessWidget {
   final Map<String, dynamic> message;
   final bool isMe;
 
-  // Key is vital here to prevent the image from disappearing on keyboard pop
   const ChatBubble({
     required Key key,
     required this.message,
     required this.isMe,
   }) : super(key: key);
-  void _showFullScreenImage(BuildContext context, String type, String content) {
-    // Helper to determine if content is a URL or Base64
-    bool isUrl = content.startsWith('http');
 
+  // 1. Image Full Screen Viewer
+  void _showFullScreenImage(BuildContext context, String content) {
+    bool isUrl = content.startsWith('http');
     showDialog(
       context: context,
       builder: (context) => Scaffold(
@@ -36,6 +36,16 @@ class ChatBubble extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  // 2. WebView Pop-up (Bottom Sheet)
+  void _showWebPopup(BuildContext context, String url) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _WebPreviewPopup(url: url),
     );
   }
 
@@ -62,13 +72,10 @@ class ChatBubble extends StatelessWidget {
           maxWidth: MediaQuery.of(context).size.width * 0.7,
         ),
         decoration: BoxDecoration(
-          color: isMe
-              ? AppConstatnts.colorTeal
-              : AppConstatnts
-                    .colorPink, //isMe ? const Color(0xFF7E72B8) : Colors.white,
+          color: isMe ? AppConstatnts.colorTeal : AppConstatnts.colorPink,
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
+              color: Colors.black.withOpacity(0.05),
               blurRadius: 5,
               offset: const Offset(0, 2),
             ),
@@ -87,9 +94,10 @@ class ChatBubble extends StatelessWidget {
     final String content = message['content'];
     final bool isUrl = content.startsWith('http');
 
+    // Handle Images and GIFs
     if (message['type'] == 'image' || message['type'] == 'gif') {
       return GestureDetector(
-        onTap: () => _showFullScreenImage(context, message['type'], content),
+        onTap: () => _showFullScreenImage(context, content),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: isUrl
@@ -116,14 +124,97 @@ class ChatBubble extends StatelessWidget {
       );
     }
 
-    return Text(
-      content,
-      style: TextStyle(color: isMe ? Colors.white : Colors.black87),
+    // Handle Text (and detect Links for WebView)
+    return GestureDetector(
+      onTap: isUrl ? () => _showWebPopup(context, content) : null,
+      child: Text(
+        content,
+        style: TextStyle(
+          color: isMe ? Colors.white : Colors.black87,
+          decoration: isUrl ? TextDecoration.underline : TextDecoration.none,
+          decorationColor: isMe ? Colors.white70 : Colors.blue,
+        ),
+      ),
     );
   }
 }
 
-// Add this for the Lobby
+// Internal WebView Pop-up Class
+// Internal WebView Pop-up Class - FIXED SCROLLING
+class _WebPreviewPopup extends StatefulWidget {
+  final String url;
+  const _WebPreviewPopup({required this.url});
+
+  @override
+  State<_WebPreviewPopup> createState() => _WebPreviewPopupState();
+}
+
+class _WebPreviewPopupState extends State<_WebPreviewPopup> {
+  late final WebViewController _controller;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      // Allows the webview to handle its own scrolling
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageFinished: (_) {
+            if (mounted) setState(() => _loading = false);
+          },
+        ),
+      )
+      ..loadRequest(Uri.parse(widget.url));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      // Height set to 90% for a better "Browser" feel
+      height: MediaQuery.of(context).size.height * 0.9,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        children: [
+          // Drag handle
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 12),
+            height: 5,
+            width: 45,
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+          Expanded(
+            child: Stack(
+              children: [
+                // Wrap in a GestureDetector to prevent the bottom sheet
+                // from intercepting the scroll swipes
+                GestureDetector(
+                  onVerticalDragUpdate:
+                      (
+                        _,
+                      ) {}, // Prevents "dragging down" to close while scrolling content
+                  child: WebViewWidget(controller: _controller),
+                ),
+                if (_loading)
+                  const Center(
+                    child: CircularProgressIndicator(color: Colors.teal),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class LobbyInput extends StatelessWidget {
   final TextEditingController controller;
   final String label;
