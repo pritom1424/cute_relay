@@ -1,0 +1,431 @@
+import 'package:fast_chat/app_constatnts.dart';
+import 'package:flutter/material.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:giphy_get/giphy_get.dart';
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+
+import 'dart:convert';
+import 'dart:async';
+import '../session_manager.dart';
+import '../widgets/widgets.dart';
+import 'package:http/http.dart' as http;
+import 'package:loading_animation_widget/loading_animation_widget.dart';
+
+class ChatScreen extends StatefulWidget {
+  final String userName, roomId;
+  final bool isCreating; // ADD THIS
+  const ChatScreen({
+    super.key,
+    required this.userName,
+    required this.roomId,
+    this.isCreating = false,
+  });
+  @override
+  State<ChatScreen> createState() => _ChatScreenState();
+}
+
+class _ChatScreenState extends State<ChatScreen> {
+  IO.Socket? socket;
+  final _controller = TextEditingController();
+  final _scroll = ScrollController();
+  final FocusNode _focusNode = FocusNode();
+
+  List<Map<String, dynamic>> messages = [];
+  bool isOnline = false;
+  bool showEmoji = false;
+  bool isInitializing = true; // Added to manage initial loading state
+
+  final ValueNotifier<bool> _otherTyping = ValueNotifier<bool>(false);
+  Timer? _typingTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode.addListener(() {
+      if (_focusNode.hasFocus && showEmoji) setState(() => showEmoji = false);
+    });
+    _setup();
+  }
+
+  @override
+  void dispose() {
+    socket?.off('receive-payload');
+    socket?.disconnect();
+    socket?.dispose();
+    _controller.dispose();
+    _focusNode.dispose();
+    _otherTyping.dispose();
+    _typingTimer?.cancel();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _setup() async {
+    // 1. Load History first so user sees something immediately
+    final prefs = await SharedPreferences.getInstance();
+    String? history = prefs.getString('chat_${widget.roomId}');
+    if (history != null) {
+      if (mounted) {
+        setState(() {
+          messages = List<Map<String, dynamic>>.from(jsonDecode(history));
+        });
+      }
+      _jump();
+    }
+
+    // 2. Fetch the Dynamic URL from Gist (PERMANENT LINK)
+    try {
+      // Use the permanent link without the version hash
+      final String rawGistURl =
+          "https://gist.githubusercontent.com/pritom1424/145109e9439d97ea90ac8ecdb9ac2bd8/raw/config.json";
+
+      final response = await http
+          .get(Uri.parse(rawGistURl))
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        _connect(data['socket_url']);
+      } else {
+        throw Exception("Gist Load Failed");
+      }
+    } catch (e) {
+      // Fallback if Gist is down or internet is slow
+      _connect('https://capable-cariotta-pumpkin-d453d8e0.koyeb.app');
+    }
+  }
+
+  void _connect(String url) {
+    socket = IO.io(
+      url,
+      IO.OptionBuilder()
+          .setTransports(['websocket'])
+          .enableAutoConnect()
+          .build(),
+    );
+
+    socket!.onConnect((_) {
+      // Logic: Choose event based on the button clicked in Lobby
+      if (widget.isCreating) {
+        socket!.emit('create-room', widget.roomId);
+      } else {
+        socket!.emit('join-room', widget.roomId);
+      }
+    });
+
+    // Listen for the validation message you added in index.js
+    socket!.on('system-msg', (data) {
+      if (!mounted) return;
+      if (data['status'] == 'success') {
+        setState(() {
+          isInitializing = false;
+          isOnline = true;
+        });
+        // Only send the "joined" announcement if we successfully entered
+        _send('system', '${widget.userName} joined ✨', saveLocally: false);
+      } else {
+        // Handle 'not-found' or 'full'
+        socket!.disconnect();
+        _showErrorDialog(data['message']);
+      }
+    });
+    // 1. Listen for incoming messages/payloads
+    socket!.on('receive-payload', (data) {
+      if (!mounted) return;
+
+      // Handle Typing indicator
+      if (data['type'] == 'typing') {
+        if (data['senderId'] != socket?.id) {
+          _otherTyping.value = data['isTyping'] ?? false;
+        }
+        return;
+      }
+
+      // Handle actual Messages (Text, Image, Gif, System)
+      setState(() {
+        // Prevent duplicate messages if the server echoes back to sender
+        bool isDuplicate = messages.any(
+          (m) =>
+              m['content'] == data['content'] &&
+              m['senderId'] == data['senderId'],
+        );
+
+        if (!isDuplicate || data['type'] == 'system') {
+          messages.add(Map<String, dynamic>.from(data));
+          _save(); // Save to SharedPreferences
+          _jump(); // Auto-scroll to bottom
+        }
+      });
+    });
+
+    socket!.onConnectError((err) {
+      if (mounted) setState(() => isInitializing = false);
+      print("Connection Error: $err");
+    });
+
+    // ... Keep your existing socket!.on('receive-payload') exactly as it is ...
+  }
+
+  // Add this helper method inside _ChatScreenState
+  void _showErrorDialog(String msg) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text("Oops!"),
+        content: Text(msg),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context); // Close dialog
+              Navigator.pop(context); // Go back to Lobby
+            },
+            child: const Text("Go Back"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _send(String type, String content, {bool saveLocally = true}) {
+    if (socket == null) return;
+    var data = {
+      'roomId': widget.roomId,
+      'type': type,
+      'content': content,
+      'senderName': widget.userName,
+      'senderId': socket?.id,
+    };
+    socket!.emit('send-payload', data);
+
+    if (saveLocally && type != 'system') {
+      setState(() => messages.add(data));
+      _save();
+      _jump();
+    }
+  }
+
+  void _onTextChanged(String val) {
+    if (socket == null) return;
+    socket!.emit('send-payload', {
+      'roomId': widget.roomId,
+      'type': 'typing',
+      'isTyping': val.isNotEmpty,
+      'senderId': socket!.id,
+    });
+    _typingTimer?.cancel();
+    _typingTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted && socket != null)
+        socket!.emit('send-payload', {
+          'roomId': widget.roomId,
+          'type': 'typing',
+          'isTyping': false,
+          'senderId': socket!.id,
+        });
+    });
+  }
+
+  Future<void> _pickImage() async {
+    final img = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 50,
+    );
+    if (img != null) {
+      final bytes = await img.readAsBytes();
+      _send('image', base64Encode(bytes));
+    }
+  }
+
+  Future<void> _pickGiphy() async {
+    GiphyGif? gif = await GiphyGet.getGif(
+      context: context,
+      apiKey: 'gA8nJlYL5wy3QeeHaQSby8Na46CqjQ6G',
+    );
+    if (gif?.images?.fixedHeightDownsampled?.url != null)
+      _send('gif', gif!.images!.fixedHeightDownsampled!.url);
+  }
+
+  Future<void> _save() async {
+    final prefs = await SharedPreferences.getInstance();
+    prefs.setString('chat_${widget.roomId}', jsonEncode(messages));
+  }
+
+  void _jump() {
+    Future.delayed(const Duration(milliseconds: 200), () {
+      if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screen = MediaQuery.of(context).size;
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8F9FA),
+      resizeToAvoidBottomInset: true,
+      appBar: AppBar(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              "Room ID: ${widget.roomId}",
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Colors.blue,
+              ),
+            ),
+            ValueListenableBuilder<bool>(
+              valueListenable: _otherTyping,
+              builder: (context, typing, _) => Text(
+                typing
+                    ? "typing..."
+                    : (isOnline ? "Active now" : "Connecting..."),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: typing
+                      ? Colors.blue
+                      : (isOnline ? Colors.green : Colors.orange),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout, color: Colors.pink),
+            onPressed: () async {
+              await SessionManager.clearRoom(widget.roomId);
+              if (context.mounted) Navigator.pop(context);
+            },
+          ),
+        ],
+      ),
+      body: isInitializing
+          ? Center(
+              child: LoadingAnimationWidget.fourRotatingDots(
+                // leftDotColor: AppConstatnts.colorPink,
+                // rightDotColor: AppConstatnts.colorTeal,
+                color: AppConstatnts.colorTeal,
+                size: screen.height * 0.06,
+              ),
+            ) // LOADER GUARD
+          : PopScope(
+              canPop: !showEmoji,
+              onPopInvokedWithResult: (didPop, result) {
+                if (showEmoji) setState(() => showEmoji = false);
+              },
+              child: Column(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        _focusNode.unfocus();
+                        setState(() => showEmoji = false);
+                      },
+                      child: ListView.builder(
+                        controller: _scroll,
+                        padding: const EdgeInsets.all(16),
+                        itemCount: messages.length,
+                        itemBuilder: (c, i) => ChatBubble(
+                          key: ValueKey(messages[i]['content'] + i.toString()),
+                          message: messages[i],
+                          isMe: messages[i]['senderId'] == socket?.id,
+                        ),
+                      ),
+                    ),
+                  ),
+                  _buildInputArea(),
+                  if (showEmoji)
+                    SizedBox(
+                      height: 250,
+                      child: EmojiPicker(
+                        onEmojiSelected: (category, emoji) =>
+                            _controller.text += emoji.emoji,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+    );
+  }
+
+  Widget _buildInputArea() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      color: Colors.white,
+      child: SafeArea(
+        child: Row(
+          children: [
+            IconButton(
+              icon: Icon(
+                showEmoji ? Icons.keyboard : Icons.emoji_emotions_outlined,
+              ),
+              color: Colors.teal,
+              onPressed: () {
+                if (showEmoji) {
+                  _focusNode.requestFocus();
+                } else {
+                  _focusNode.unfocus();
+                  setState(() => showEmoji = true);
+                }
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.image_outlined),
+              onPressed: _pickImage,
+              color: Colors.pink,
+            ),
+            IconButton(
+              icon: const Icon(Icons.gif_box_outlined),
+              onPressed: _pickGiphy,
+              color: Colors.teal,
+            ),
+            Expanded(
+              child: TextField(
+                focusNode: _focusNode,
+                controller: _controller,
+                onChanged: _onTextChanged,
+                // ADD THIS BLOCK:
+                contentInsertionConfiguration: ContentInsertionConfiguration(
+                  allowedMimeTypes: const <String>[
+                    'image/gif',
+                    'image/png',
+                    'image/jpeg',
+                  ],
+                  onContentInserted: (KeyboardInsertedContent content) async {
+                    if (content.data != null) {
+                      // The keyboard sends the GIF as bytes. We convert to Base64 to send.
+                      String base64Content = base64Encode(content.data!);
+                      _send('gif', base64Content);
+                    } else if (content.uri.isNotEmpty) {
+                      // Sometimes keyboards send a URI link instead of raw bytes
+                      _send('gif', content.uri);
+                    }
+                  },
+                ),
+                decoration: const InputDecoration(
+                  hintText: "Message...",
+                  border: InputBorder.none,
+                ),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.send, color: Colors.pink),
+              onPressed: () {
+                if (_controller.text.trim().isNotEmpty) {
+                  _send('text', _controller.text.trim());
+                  _controller.clear();
+                  _focusNode.unfocus();
+                  setState(() => showEmoji = false);
+                  _onTextChanged("");
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
