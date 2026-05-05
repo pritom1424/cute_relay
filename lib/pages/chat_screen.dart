@@ -269,6 +269,56 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final screen = MediaQuery.of(context).size;
+    final isWide = screen.width > 600;
+
+    final chatBody = isInitializing
+        ? Center(
+      child: LoadingAnimationWidget.fourRotatingDots(
+        color: AppConstatnts.colorTeal,
+        size: screen.height * 0.06,
+      ),
+    )
+        : PopScope(
+      canPop: !showEmoji,
+      onPopInvokedWithResult: (didPop, result) {
+        if (showEmoji) setState(() => showEmoji = false);
+      },
+      child: Column(
+        children: [
+          Expanded(
+            child: GestureDetector(
+              onTap: () {
+                _focusNode.unfocus();
+                setState(() => showEmoji = false);
+              },
+              child: ListView.builder(
+                controller: _scroll,
+                padding: EdgeInsets.symmetric(
+                  horizontal: isWide ? 24 : 16,
+                  vertical: 16,
+                ),
+                itemCount: messages.length,
+                itemBuilder: (c, i) => ChatBubble(
+                  key: ValueKey(messages[i]['content'] + i.toString()),
+                  message: messages[i],
+                  isMe: messages[i]['senderId'] == _localUserId,
+                ),
+              ),
+            ),
+          ),
+          _buildInputArea(isWide),
+          if (!kIsWeb && showEmoji)
+            SizedBox(
+              height: 250,
+              child: EmojiPicker(
+                onEmojiSelected: (category, emoji) =>
+                _controller.text += emoji.emoji,
+              ),
+            ),
+        ],
+      ),
+    );
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
       resizeToAvoidBottomInset: true,
@@ -310,92 +360,77 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ],
       ),
-      body: isInitializing
+      // On wide screens, center the chat with max width
+      body: isWide
           ? Center(
-              child: LoadingAnimationWidget.fourRotatingDots(
-                // leftDotColor: AppConstatnts.colorPink,
-                // rightDotColor: AppConstatnts.colorTeal,
-                color: AppConstatnts.colorTeal,
-                size: screen.height * 0.06,
-              ),
-            ) // LOADER GUARD
-          : PopScope(
-              canPop: !showEmoji,
-              onPopInvokedWithResult: (didPop, result) {
-                if (showEmoji) setState(() => showEmoji = false);
-              },
-              child: Column(
-                children: [
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () {
-                        _focusNode.unfocus();
-                        setState(() => showEmoji = false);
-                      },
-                      child: ListView.builder(
-                        controller: _scroll,
-                        padding: const EdgeInsets.all(16),
-                        itemCount: messages.length,
-                        itemBuilder: (c, i) => ChatBubble(
-                          key: ValueKey(messages[i]['content'] + i.toString()),
-                          message: messages[i],
-                          isMe: messages[i]['senderId'] == _localUserId,
-                        ),
-                      ),
-                    ),
-                  ),
-                  _buildInputArea(),
-                  if (showEmoji)
-                    SizedBox(
-                      height: 250,
-                      child: EmojiPicker(
-                        onEmojiSelected: (category, emoji) =>
-                            _controller.text += emoji.emoji,
-                      ),
-                    ),
-                ],
-              ),
-            ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720),
+          child: chatBody,
+        ),
+      )
+          : chatBody,
     );
   }
 
-  Widget _buildInputArea() {
+  Widget _buildInputArea(bool isWide) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      color: Colors.white,
+      padding: EdgeInsets.symmetric(
+        horizontal: isWide ? 16 : 8,
+        vertical: 4,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
       child: SafeArea(
         child: Row(
           children: [
-            IconButton(
-              icon: Icon(
-                showEmoji ? Icons.keyboard : Icons.emoji_emotions_outlined,
+            // Hide emoji + giphy buttons on web
+            if (!kIsWeb) ...[
+              IconButton(
+                icon: Icon(
+                  showEmoji ? Icons.keyboard : Icons.emoji_emotions_outlined,
+                ),
+                color: Colors.teal,
+                onPressed: () {
+                  if (showEmoji) {
+                    _focusNode.requestFocus();
+                  } else {
+                    _focusNode.unfocus();
+                    setState(() => showEmoji = true);
+                  }
+                },
               ),
-              color: Colors.teal,
-              onPressed: () {
-                if (showEmoji) {
-                  _focusNode.requestFocus();
-                } else {
-                  _focusNode.unfocus();
-                  setState(() => showEmoji = true);
-                }
-              },
-            ),
+              IconButton(
+                icon: const Icon(Icons.gif_box_outlined),
+                onPressed: _pickGiphy,
+                color: Colors.teal,
+              ),
+            ],
             IconButton(
               icon: const Icon(Icons.image_outlined),
               onPressed: _pickImage,
               color: Colors.pink,
-            ),
-            IconButton(
-              icon: const Icon(Icons.gif_box_outlined),
-              onPressed: _pickGiphy,
-              color: Colors.teal,
             ),
             Expanded(
               child: TextField(
                 focusNode: _focusNode,
                 controller: _controller,
                 onChanged: _onTextChanged,
-                // ADD THIS BLOCK:
+                onSubmitted: (_) {
+                  // Allow Enter key to send on web
+                  if (kIsWeb && _controller.text.trim().isNotEmpty) {
+                    _send('text', _controller.text.trim());
+                    _controller.clear();
+                    _onTextChanged("");
+                  }
+                },
                 contentInsertionConfiguration: ContentInsertionConfiguration(
                   allowedMimeTypes: const <String>[
                     'image/gif',
@@ -404,17 +439,14 @@ class _ChatScreenState extends State<ChatScreen> {
                   ],
                   onContentInserted: (KeyboardInsertedContent content) async {
                     if (content.data != null) {
-                      // The keyboard sends the GIF as bytes. We convert to Base64 to send.
-                      String base64Content = base64Encode(content.data!);
-                      _send('gif', base64Content);
+                      _send('gif', base64Encode(content.data!));
                     } else if (content.uri.isNotEmpty) {
-                      // Sometimes keyboards send a URI link instead of raw bytes
                       _send('gif', content.uri);
                     }
                   },
                 ),
-                decoration: const InputDecoration(
-                  hintText: "Message...",
+                decoration: InputDecoration(
+                  hintText: kIsWeb ? "Message... (Enter to send)" : "Message...",
                   border: InputBorder.none,
                 ),
               ),
