@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:html' as html; // only used on web
 import 'package:fast_chat/app_constatnts.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:webview_flutter/webview_flutter.dart'; // Ensure this is in pubspec.yaml
@@ -126,7 +128,14 @@ class ChatBubble extends StatelessWidget {
 
     // Handle Text (and detect Links for WebView)
     return GestureDetector(
-      onTap: isUrl ? () => _showWebPopup(context, content) : null,
+      onTap: isUrl ? () {
+        if (kIsWeb) {
+          // Open in new tab on web
+          html.window.open(content, '_blank');
+        } else {
+          _showWebPopup(context, content);
+        }
+      } : null,
       child: Text(
         content,
         style: TextStyle(
