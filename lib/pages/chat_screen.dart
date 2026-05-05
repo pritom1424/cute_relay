@@ -1,4 +1,5 @@
 import 'package:fast_chat/app_constatnts.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -27,6 +28,7 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  String _localUserId = ''; // ADD THIS
   IO.Socket? socket;
   final _controller = TextEditingController();
   final _scroll = ScrollController();
@@ -62,9 +64,20 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
+
+
   Future<void> _setup() async {
-    // 1. Load History first so user sees something immediately
     final prefs = await SharedPreferences.getInstance();
+
+    // Get or create a stable local user ID
+    String? localId = prefs.getString('local_user_id');
+    if (localId == null) {
+      localId = DateTime.now().millisecondsSinceEpoch.toString();
+      await prefs.setString('local_user_id', localId);
+    }
+    _localUserId = localId;
+
+    // Load history
     String? history = prefs.getString('chat_${widget.roomId}');
     if (history != null) {
       if (mounted) {
@@ -75,9 +88,8 @@ class _ChatScreenState extends State<ChatScreen> {
       _jump();
     }
 
-    // 2. Fetch the Dynamic URL from Gist (PERMANENT LINK)
+    // Fetch Dynamic URL from Gist
     try {
-      // Use the permanent link without the version hash
       final String rawGistURl =
           "https://gist.githubusercontent.com/pritom1424/145109e9439d97ea90ac8ecdb9ac2bd8/raw/config.json";
 
@@ -87,12 +99,17 @@ class _ChatScreenState extends State<ChatScreen> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        _connect(data['socket_url']);
+        String socketUrl = data['socket_url'];
+
+        // On web, replace https with wss for the socket connection
+        if (kIsWeb) {
+          socketUrl = socketUrl.replaceFirst('https://', 'wss://');
+        }
+        _connect(socketUrl);
       } else {
         throw Exception("Gist Load Failed");
       }
     } catch (e) {
-      // Fallback if Gist is down or internet is slow
       _connect('https://capable-cariotta-pumpkin-d453d8e0.koyeb.app');
     }
   }
@@ -107,7 +124,6 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     socket!.onConnect((_) {
-      // Logic: Choose event based on the button clicked in Lobby
       if (widget.isCreating) {
         socket!.emit('create-room', widget.roomId);
       } else {
@@ -115,7 +131,6 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     });
 
-    // Listen for the validation message you added in index.js
     socket!.on('system-msg', (data) {
       if (!mounted) return;
       if (data['status'] == 'success') {
@@ -123,39 +138,34 @@ class _ChatScreenState extends State<ChatScreen> {
           isInitializing = false;
           isOnline = true;
         });
-        // Only send the "joined" announcement if we successfully entered
         _send('system', '${widget.userName} joined ✨', saveLocally: false);
       } else {
-        // Handle 'not-found' or 'full'
         socket!.disconnect();
         _showErrorDialog(data['message']);
       }
     });
-    // 1. Listen for incoming messages/payloads
+
     socket!.on('receive-payload', (data) {
       if (!mounted) return;
 
-      // Handle Typing indicator
       if (data['type'] == 'typing') {
-        if (data['senderId'] != socket?.id) {
+        if (data['senderId'] != _localUserId) { // ← FIXED
           _otherTyping.value = data['isTyping'] ?? false;
         }
         return;
       }
 
-      // Handle actual Messages (Text, Image, Gif, System)
       setState(() {
-        // Prevent duplicate messages if the server echoes back to sender
         bool isDuplicate = messages.any(
-          (m) =>
-              m['content'] == data['content'] &&
+              (m) =>
+          m['content'] == data['content'] &&
               m['senderId'] == data['senderId'],
         );
 
         if (!isDuplicate || data['type'] == 'system') {
           messages.add(Map<String, dynamic>.from(data));
-          _save(); // Save to SharedPreferences
-          _jump(); // Auto-scroll to bottom
+          _save();
+          _jump();
         }
       });
     });
@@ -164,8 +174,6 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) setState(() => isInitializing = false);
       print("Connection Error: $err");
     });
-
-    // ... Keep your existing socket!.on('receive-payload') exactly as it is ...
   }
 
   // Add this helper method inside _ChatScreenState
@@ -196,7 +204,7 @@ class _ChatScreenState extends State<ChatScreen> {
       'type': type,
       'content': content,
       'senderName': widget.userName,
-      'senderId': socket?.id,
+      'senderId': _localUserId, // ← FIXED
     };
     socket!.emit('send-payload', data);
 
@@ -213,7 +221,7 @@ class _ChatScreenState extends State<ChatScreen> {
       'roomId': widget.roomId,
       'type': 'typing',
       'isTyping': val.isNotEmpty,
-      'senderId': socket!.id,
+      'senderId': _localUserId, // ← FIXED
     });
     _typingTimer?.cancel();
     _typingTimer = Timer(const Duration(seconds: 2), () {
@@ -222,7 +230,7 @@ class _ChatScreenState extends State<ChatScreen> {
           'roomId': widget.roomId,
           'type': 'typing',
           'isTyping': false,
-          'senderId': socket!.id,
+          'senderId': _localUserId, // ← FIXED
         });
     });
   }
@@ -331,7 +339,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         itemBuilder: (c, i) => ChatBubble(
                           key: ValueKey(messages[i]['content'] + i.toString()),
                           message: messages[i],
-                          isMe: messages[i]['senderId'] == socket?.id,
+                          isMe: messages[i]['senderId'] == _localUserId,
                         ),
                       ),
                     ),
