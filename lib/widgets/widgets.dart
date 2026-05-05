@@ -1,11 +1,12 @@
 import 'dart:convert';
-import 'dart:html' as html; // only used on web
+import 'dart:js_interop' if (dart.library.io) '';
 import 'package:fast_chat/app_constatnts.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:webview_flutter/webview_flutter.dart'; // Ensure this is in pubspec.yaml
-
+@JS('window.open')
+external void _windowOpen(String url, String target);
 class ChatBubble extends StatelessWidget {
   final Map<String, dynamic> message;
   final bool isMe;
@@ -131,7 +132,7 @@ class ChatBubble extends StatelessWidget {
       onTap: isUrl ? () {
         if (kIsWeb) {
           // Open in new tab on web
-          html.window.open(content, '_blank');
+          _windowOpen(content, '_blank');
         } else {
           _showWebPopup(context, content);
         }
