@@ -64,8 +64,6 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
-
-
   Future<void> _setup() async {
     final prefs = await SharedPreferences.getInstance();
 
@@ -149,7 +147,8 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
 
       if (data['type'] == 'typing') {
-        if (data['senderId'] != _localUserId) { // ← FIXED
+        if (data['senderId'] != _localUserId) {
+          // ← FIXED
           _otherTyping.value = data['isTyping'] ?? false;
         }
         return;
@@ -157,8 +156,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
       setState(() {
         bool isDuplicate = messages.any(
-              (m) =>
-          m['content'] == data['content'] &&
+          (m) =>
+              m['content'] == data['content'] &&
               m['senderId'] == data['senderId'],
         );
 
@@ -273,51 +272,51 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final chatBody = isInitializing
         ? Center(
-      child: LoadingAnimationWidget.fourRotatingDots(
-        color: AppConstatnts.colorTeal,
-        size: screen.height * 0.06,
-      ),
-    )
+            child: LoadingAnimationWidget.fourRotatingDots(
+              color: AppConstatnts.colorTeal,
+              size: screen.height * 0.06,
+            ),
+          )
         : PopScope(
-      canPop: !showEmoji,
-      onPopInvokedWithResult: (didPop, result) {
-        if (showEmoji) setState(() => showEmoji = false);
-      },
-      child: Column(
-        children: [
-          Expanded(
-            child: GestureDetector(
-              onTap: () {
-                _focusNode.unfocus();
-                setState(() => showEmoji = false);
-              },
-              child: ListView.builder(
-                controller: _scroll,
-                padding: EdgeInsets.symmetric(
-                  horizontal: isWide ? 24 : 16,
-                  vertical: 16,
+            canPop: !showEmoji,
+            onPopInvokedWithResult: (didPop, result) {
+              if (showEmoji) setState(() => showEmoji = false);
+            },
+            child: Column(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      _focusNode.unfocus();
+                      setState(() => showEmoji = false);
+                    },
+                    child: ListView.builder(
+                      controller: _scroll,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: isWide ? 24 : 16,
+                        vertical: 16,
+                      ),
+                      itemCount: messages.length,
+                      itemBuilder: (c, i) => ChatBubble(
+                        key: ValueKey(messages[i]['content'] + i.toString()),
+                        message: messages[i],
+                        isMe: messages[i]['senderId'] == _localUserId,
+                      ),
+                    ),
+                  ),
                 ),
-                itemCount: messages.length,
-                itemBuilder: (c, i) => ChatBubble(
-                  key: ValueKey(messages[i]['content'] + i.toString()),
-                  message: messages[i],
-                  isMe: messages[i]['senderId'] == _localUserId,
-                ),
-              ),
+                _buildInputArea(isWide),
+                if (!kIsWeb && showEmoji)
+                  SizedBox(
+                    height: 250,
+                    child: EmojiPicker(
+                      onEmojiSelected: (category, emoji) =>
+                          _controller.text += emoji.emoji,
+                    ),
+                  ),
+              ],
             ),
-          ),
-          _buildInputArea(isWide),
-          if (!kIsWeb && showEmoji)
-            SizedBox(
-              height: 250,
-              child: EmojiPicker(
-                onEmojiSelected: (category, emoji) =>
-                _controller.text += emoji.emoji,
-              ),
-            ),
-        ],
-      ),
-    );
+          );
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
@@ -363,21 +362,18 @@ class _ChatScreenState extends State<ChatScreen> {
       // On wide screens, center the chat with max width
       body: isWide
           ? Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 720),
-          child: chatBody,
-        ),
-      )
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 720),
+                child: chatBody,
+              ),
+            )
           : chatBody,
     );
   }
 
   Widget _buildInputArea(bool isWide) {
     return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: isWide ? 16 : 8,
-        vertical: 4,
-      ),
+      padding: EdgeInsets.symmetric(horizontal: isWide ? 16 : 8, vertical: 4),
       decoration: BoxDecoration(
         color: Colors.white,
         boxShadow: [
@@ -391,28 +387,47 @@ class _ChatScreenState extends State<ChatScreen> {
       child: SafeArea(
         child: Row(
           children: [
+            IconButton(
+              icon: Icon(
+                showEmoji ? Icons.keyboard : Icons.emoji_emotions_outlined,
+              ),
+              color: Colors.teal,
+              onPressed: () {
+                if (showEmoji) {
+                  _focusNode.requestFocus();
+                } else {
+                  _focusNode.unfocus();
+                  setState(() => showEmoji = true);
+                }
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.gif_box_outlined),
+              onPressed: _pickGiphy,
+              color: Colors.teal,
+            ),
             // Hide emoji + giphy buttons on web
-            if (!kIsWeb) ...[
-              IconButton(
-                icon: Icon(
-                  showEmoji ? Icons.keyboard : Icons.emoji_emotions_outlined,
-                ),
-                color: Colors.teal,
-                onPressed: () {
-                  if (showEmoji) {
-                    _focusNode.requestFocus();
-                  } else {
-                    _focusNode.unfocus();
-                    setState(() => showEmoji = true);
-                  }
-                },
-              ),
-              IconButton(
-                icon: const Icon(Icons.gif_box_outlined),
-                onPressed: _pickGiphy,
-                color: Colors.teal,
-              ),
-            ],
+            // if (!kIsWeb) ...[
+            //   IconButton(
+            //     icon: Icon(
+            //       showEmoji ? Icons.keyboard : Icons.emoji_emotions_outlined,
+            //     ),
+            //     color: Colors.teal,
+            //     onPressed: () {
+            //       if (showEmoji) {
+            //         _focusNode.requestFocus();
+            //       } else {
+            //         _focusNode.unfocus();
+            //         setState(() => showEmoji = true);
+            //       }
+            //     },
+            //   ),
+            //   IconButton(
+            //     icon: const Icon(Icons.gif_box_outlined),
+            //     onPressed: _pickGiphy,
+            //     color: Colors.teal,
+            //   ),
+            // ],
             IconButton(
               icon: const Icon(Icons.image_outlined),
               onPressed: _pickImage,
@@ -446,7 +461,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   },
                 ),
                 decoration: InputDecoration(
-                  hintText: kIsWeb ? "Message... (Enter to send)" : "Message...",
+                  hintText: kIsWeb
+                      ? "Message... (Enter to send)"
+                      : "Message...",
                   border: InputBorder.none,
                 ),
               ),
