@@ -42,6 +42,106 @@ class _ChatScreenState extends State<ChatScreen> {
   final ValueNotifier<bool> _otherTyping = ValueNotifier<bool>(false);
   Timer? _typingTimer;
 
+  List<String> _gifIds = [];
+  bool _gifLoading = false;
+  bool _gifError = false;
+
+  //custom GIF
+  Future<void> _loadGifs() async {
+    try {
+      setState(() {
+        _gifLoading = true;
+        _gifError = false;
+      });
+
+      final res = await http.get(Uri.parse(AppConstatnts.rawURlGif));
+
+      if (res.statusCode != 200) {
+        throw Exception("Failed to load manifest");
+      }
+
+      final data = jsonDecode(res.body);
+
+      List pages = data['pages'] ?? [];
+
+      List<String> loaded = [];
+
+      for (var page in pages) {
+        for (var item in page['items']) {
+          loaded.add(item.toString());
+        }
+      }
+
+      setState(() {
+        _gifIds = loaded;
+        _gifLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _gifLoading = false;
+        _gifError = true;
+      });
+    }
+  }
+  void _openGifPicker() {
+    _loadGifs();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, setStateModal) {
+            return SizedBox(
+              height: MediaQuery.of(context).size.height * 0.7,
+              child: _gifLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _gifError
+                  ? Center(
+                child: ElevatedButton(
+                  onPressed: _loadGifs,
+                  child: const Text("Retry"),
+                ),
+              )
+                  : GridView.builder(
+                padding: const EdgeInsets.all(8),
+                gridDelegate:
+                const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  crossAxisSpacing: 6,
+                  mainAxisSpacing: 6,
+                ),
+                itemCount: _gifIds.length,
+                itemBuilder: (context, index) {
+                  final id = _gifIds[index];
+                  final url =
+                      "${AppConstatnts.cloudinaryBase}$id.gif";
+
+                  return GestureDetector(
+                    onTap: () {
+                      Navigator.pop(context);
+                      _send('gif', url);
+                    },
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Image.network(
+                        url,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) =>
+                        const Icon(Icons.broken_image),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+  //end custom GIF
+
   @override
   void initState() {
     super.initState();
@@ -387,20 +487,21 @@ class _ChatScreenState extends State<ChatScreen> {
       child: SafeArea(
         child: Row(
           children: [
-            IconButton(
-              icon: Icon(
-                showEmoji ? Icons.keyboard : Icons.emoji_emotions_outlined,
-              ),
-              color: Colors.teal,
-              onPressed: () {
-                if (showEmoji) {
-                  _focusNode.requestFocus();
-                } else {
-                  _focusNode.unfocus();
-                  setState(() => showEmoji = true);
-                }
-              },
-            ),
+            // IconButton(
+            //   icon: Icon(
+            //     showEmoji ? Icons.keyboard : Icons.emoji_emotions_outlined,
+            //   ),
+            //   color: Colors.teal,
+            //   onPressed: () {
+            //     if (showEmoji) {
+            //       _focusNode.requestFocus();
+            //     } else {
+            //       _focusNode.unfocus();
+            //       setState(() => showEmoji = true);
+            //     }
+            //   },
+            // ),
+            IconButton(onPressed: _openGifPicker, icon: const Icon(Icons.gif_box),),
             IconButton(
               icon: const Icon(Icons.gif_box_outlined),
               onPressed: _pickGiphy,
@@ -484,5 +585,16 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ),
     );
+  }
+}
+
+
+class GifItem {
+  final String id;
+
+  GifItem({required this.id});
+
+  factory GifItem.fromJson(dynamic json) {
+    return GifItem(id: json.toString());
   }
 }
